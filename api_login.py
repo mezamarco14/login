@@ -1,13 +1,14 @@
 from flask import Flask, redirect, url_for, session, request, abort
 from msal import ConfidentialClientApplication
 from dotenv import load_dotenv
-from pymongo import MongoClient
 from oauthlib.oauth2 import WebApplicationClient
 import certifi
 import os
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 import requests
-from datetime import datetime  # Importar datetime
+import jwt  # Librería para generar JWT
+import datetime
+from pymongo import MongoClient
+from datetime import datetime as dt
 
 # Inicializar la aplicación Flask y cargar el archivo .env
 app = Flask(__name__)
@@ -25,7 +26,7 @@ SCOPE = ["User.Read"]
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_DISCOVERY_URL = os.getenv("GOOGLE_DISCOVERY_URL")
-
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # Solo para desarrollo
 # Configurar el cliente MSAL
 app_msal = ConfidentialClientApplication(
     CLIENT_ID,
@@ -46,6 +47,20 @@ client = MongoClient(
 db = client['db_Upt_Usuarios']
 accesos_users_collection = db['Accesos_users']
 
+# Función para crear un JWT
+def create_jwt(email, name, roles):
+    # Define el payload del JWT
+    payload = {
+        'email': email,
+        'name': name,
+        'roles': roles,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)  # Expiración de 1 hora
+    }
+    # Crear el JWT utilizando un secreto
+    token = jwt.encode(payload, os.getenv("JWT_SECRET_KEY", "default_jwt_secret_key"), algorithm='HS256')
+    return token
+
+# Ruta principal que muestra el nombre y los roles si el usuario ha iniciado sesión
 @app.route('/')
 def index():
     if session.get("user"):
@@ -80,39 +95,24 @@ def authorized():
     )
 
     if "access_token" in result:
-        session["user"] = result.get("id_token_claims")
-        roles = result.get('id_token_claims', {}).get('roles', [])
+        # Obtiene la información del token de acceso
+        user_info = result.get('id_token_claims')  # Obtener las reclamaciones del token
+        email = user_info.get("preferred_username")  # Email (usualmente en 'preferred_username')
+        name = user_info.get("name")  # Nombre del usuario
+        roles = result.get('id_token_claims', {}).get('roles', [])  # Roles del usuario
+
+        # Guarda los datos del usuario y los roles en la sesión
+        session["user"] = user_info
         session['roles'] = roles
 
-        email = session["user"].get("preferred_username")
-        name = session["user"].get("name")
+        # Crear un nuevo JWT con email, name y roles
+        jwt_token = create_jwt(email, name, roles)
 
-        if email:
-            user_data = {
-                "email": email,
-                "name": name,
-                "status": "attempted_login",
-                "roles": roles,
-                "last_login": datetime.utcnow()
-            }
-            accesos_users_collection.update_one(
-                {"email": email}, 
-                {"$set": user_data}, 
-                upsert=True
-            )
+        # Redirigir con el JWT como parámetro en la URL a la nueva URL
+        return redirect(f"https://juegos-florales-upt.vercel.app/redirect?token={jwt_token}")
 
-        return redirect(url_for("index"))
     else:
         return "Error al obtener el token de acceso", 400
-
-# Cierre de sesión
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(
-        AUTHORITY + "/oauth2/v2.0/logout" +
-        "?post_logout_redirect_uri=" + url_for("index", _external=True)
-    )
 
 # Inicio de sesión con Google
 @app.route('/google/login')
@@ -157,25 +157,27 @@ def google_authorized():
         name = userinfo_response.json()["name"]
         roles = ["user"]
 
+        # Guarda los datos del usuario y los roles en la sesión
         session["user"] = {"name": name, "email": email}
         session["roles"] = roles
 
-        user_data = {
-            "email": email,
-            "name": name,
-            "status": "attempted_login",
-            "roles": roles,
-            "last_login": datetime.utcnow()
-        }
-        accesos_users_collection.update_one(
-            {"email": email},
-            {"$set": user_data},
-            upsert=True
-        )
+        # Crear un nuevo JWT con email, name y roles
+        jwt_token = create_jwt(email, name, roles)
 
-        return redirect(url_for("index"))
+        # Redirigir con el JWT como parámetro en la URL a la nueva URL
+        return redirect(f"https://juegos-florales-upt.vercel.app/redirect?token={jwt_token}")
+
     else:
         return "Error: No se pudo verificar el correo electrónico de Google.", 400
+
+# Cierre de sesión
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(
+        AUTHORITY + "/oauth2/v2.0/logout" +
+        "?post_logout_redirect_uri=" + url_for("index", _external=True)
+    )
 
 # Rutas protegidas por roles
 @app.route('/admin')
