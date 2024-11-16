@@ -6,3 +6,4 @@ certifi==2024.2.2
 gunicorn==23.0.0
 requests==2.31.0
 oauthlib==3.2.2
+PyJWT==2.8.0
