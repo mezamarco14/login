@@ -101,6 +101,10 @@ def authorized():
         name = user_info.get("name")  # Nombre del usuario
         roles = result.get('id_token_claims', {}).get('roles', [])  # Roles del usuario
 
+        # Si no hay roles, asignar el rol por defecto "user" modificaa------------
+        if not roles:
+            roles = ["user"]
+        
         # Guarda los datos del usuario y los roles en la sesión
         session["user"] = user_info
         session['roles'] = roles
