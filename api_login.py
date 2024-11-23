@@ -5,7 +5,7 @@ from oauthlib.oauth2 import WebApplicationClient
 import certifi
 import os
 import requests
-import jwt  # Librería para generar JWT
+import jwt
 import datetime
 from pymongo import MongoClient
 from datetime import datetime as dt
@@ -27,6 +27,7 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_DISCOVERY_URL = os.getenv("GOOGLE_DISCOVERY_URL")
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # Solo para desarrollo
+
 # Configurar el cliente MSAL
 app_msal = ConfidentialClientApplication(
     CLIENT_ID,
@@ -49,16 +50,19 @@ accesos_users_collection = db['Accesos_users']
 
 # Función para crear un JWT
 def create_jwt(email, name, roles):
-    # Define el payload del JWT
     payload = {
         'email': email,
         'name': name,
         'roles': roles,
         'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)  # Expiración de 1 hora
     }
-    # Crear el JWT utilizando un secreto
     token = jwt.encode(payload, os.getenv("JWT_SECRET_KEY", "default_jwt_secret_key"), algorithm='HS256')
     return token
+
+# Función para verificar si la solicitud proviene de un dispositivo móvil
+def is_mobile(user_agent):
+    mobile_agents = ["iphone", "android", "blackberry", "mobile", "opera mini"]
+    return any(agent in user_agent.lower() for agent in mobile_agents)
 
 # Ruta principal que muestra el nombre y los roles si el usuario ha iniciado sesión
 @app.route('/')
@@ -96,12 +100,12 @@ def authorized():
 
     if "access_token" in result:
         # Obtiene la información del token de acceso
-        user_info = result.get('id_token_claims')  # Obtener las reclamaciones del token
+        user_info = result.get('id_token_claims')
         email = user_info.get("preferred_username")  # Email (usualmente en 'preferred_username')
         name = user_info.get("name")  # Nombre del usuario
-        roles = result.get('id_token_claims', {}).get('roles', [])  # Roles del usuario
+        roles = result.get('id_token_claims', {}).get('roles', [])
 
-        # Si no hay roles, asignar el rol por defecto "user" modificaa------------
+        # Si no hay roles, asignar el rol por defecto "user"
         if not roles:
             roles = ["user"]
         
@@ -112,8 +116,12 @@ def authorized():
         # Crear un nuevo JWT con email, name y roles
         jwt_token = create_jwt(email, name, roles)
 
-        # Redirigir con el JWT como parámetro en la URL a la nueva URL
-        return redirect(f"https://juegos-florales-upt.vercel.app/redirect?token={jwt_token}")
+        # Si la solicitud proviene de un dispositivo móvil, mostrar directamente los roles
+        if is_mobile(request.headers.get('User-Agent', '')):
+            return f"Hola, {name}! Roles: {roles}"
+        else:
+            # De lo contrario, redirigir con el JWT como parámetro en la URL
+            return redirect(f"https://juegos-florales-upt.vercel.app/redirect?token={jwt_token}")
 
     else:
         return "Error al obtener el token de acceso", 400
@@ -168,7 +176,6 @@ def google_authorized():
         # Crear un nuevo JWT con email, name y roles
         jwt_token = create_jwt(email, name, roles)
 
-        # Redirigir con el JWT como parámetro en la URL a la nueva URL
         return redirect(f"https://juegos-florales-upt.vercel.app/redirect?token={jwt_token}")
 
     else:
@@ -198,5 +205,6 @@ def user():
     else:
         abort(403)
 
+# Arrancar la aplicación Flask
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)
